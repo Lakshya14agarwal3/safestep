@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>SafeStep — AI Risk Advisor</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          storm: { 950: '#070B14', 900: '#0B1120', 800: '#141B2E', 700: '#1E293B', 600: '#324055' },
+          mist: { 400: '#94A3B8', 200: '#CBD5E1', 100: '#E2E8F0' },
+          sky: { 400: '#38BDF8', 500: '#0EA5E9' },
+          safe: '#10B981',
+          caution: '#F59E0B',
+          danger: '#F43F5E',
+        },
+        fontFamily: {
+          display: ['"Space Grotesk"', 'sans-serif'],
+          body: ['Inter', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'monospace'],
+        },
+      },
+    },
+  };
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.25.6/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+<style>
+  body { background: #0B1120; }
+
+  @keyframes radar-sweep {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
+  .radar-sweep {
+    animation: radar-sweep 2.2s linear infinite;
+    transform-origin: center;
+  }
+  @keyframes radar-ping {
+    0% { transform: scale(0.3); opacity: 0.6; }
+    100% { transform: scale(1.8); opacity: 0; }
+  }
+  .radar-ring {
+    animation: radar-ping 2.2s ease-out infinite;
+  }
+  @keyframes drift {
+    0%, 100% { transform: translate(0, 0); }
+    50% { transform: translate(-2%, 2%); }
+  }
+  .sky-drift { animation: drift 18s ease-in-out infinite; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .radar-sweep, .radar-ring, .sky-drift { animation: none !important; }
+  }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: #0B1120; }
+  ::-webkit-scrollbar-thumb { background: #324055; border-radius: 4px; }
+
+  .leaflet-container { background: #141B2E !important; }
+</style>
+</head>
+<body class="font-body text-mist-100 min-h-screen">
+
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react,env">
+const { useState, useRef, useEffect, useCallback } = React;
+
+// ---------------------------------------------------------------------
+// Config — point this at your running backend
+// ---------------------------------------------------------------------
+const API_BASE = window.SAFESTEP_API_BASE || "http://localhost:8000";
+
+// ---------------------------------------------------------------------
+// Verdict styling
+// ---------------------------------------------------------------------
+const VERDICT_STYLES = {
+  PROCEED: { color: "#10B981", label: "Proceed", ring: "ring-safe/40", bg: "bg-safe/10", icon: "✓" },
+  CAUTION: { color: "#F59E0B", label: "Caution", ring: "ring-caution/40", bg: "bg-caution/10", icon: "!" },
+  AVOID:   { color: "#F43F5E", label: "Avoid",   ring: "ring-danger/40", bg: "bg-danger/10", icon: "✕" },
+};
+
+const ACTIVITIES = [
+  "Outdoor manual labor / farming",
+  "Commute / travel",
+  "Outdoor event or wedding",
+  "Trekking / hiking",
+  "Construction / fieldwork",
+  "Sports / exercise",
+  "Other outdoor plans",
+];
+
+// ---------------------------------------------------------------------
+// Radar loading indicator — signature motif
+// ---------------------------------------------------------------------
+function RadarLoader({ stage }) {
+  const stages = [
+    "Locating coordinates…",
+    "Reading live weather…",
+    "Checking air quality…",
+    "Scanning disaster alerts…",
+    "Synthesizing risk assessment…",
+  ];
+  return (
+    <div className="flex flex-col items-center justify-center py-16">
+      <div className="relative w-40 h-40 flex items-center justify-center">
+        <div className="absolute inset-0 rounded-full border border-sky-500/20"></div>
+        <div className="absolute inset-4 rounded-full border border-sky-500/20"></div>
+        <div className="absolute inset-8 rounded-full border border-sky-500/20"></div>
+        <div className="absolute inset-0 rounded-full radar-ring border-2 border-sky-400/60"></div>
+        <div className="absolute w-20 h-20 radar-sweep">
+          <div className="w-full h-full" style={{
+            background: "conic-gradient(from 0deg, rgba(56,189,248,0) 0%, rgba(56,189,248,0.5) 15%, rgba(56,189,248,0) 30%)",
+            borderRadius: "9999px",
+          }}></div>
+        </div>
+        <div className="w-2.5 h-2.5 rounded-full bg-sky-400 shadow-[0_0_12px_3px_rgba(56,189,248,0.6)]"></div>
+      </div>
+      <p className="mt-6 font-mono text-sm text-sky-400 tracking-wide">{stages[stage] || stages[stages.length - 1]}</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------
+function RiskMap({ lat, lon, name, verdictColor }) {
+  const mapRef = useRef(null);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+    const map = L.map(containerRef.current, { zoomControl: false, attributionControl: false }).setView([lat, lon], 9);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd', maxZoom: 19,
+    }).addTo(map);
+    L.circleMarker([lat, lon], {
+      radius: 12, color: verdictColor, weight: 2, fillColor: verdictColor, fillOpacity: 0.35,
+    }).addTo(map).bindTooltip(name, { permanent: false });
+    L.circleMarker([lat, lon], { radius: 3, color: verdictColor, weight: 0, fillColor: verdictColor, fillOpacity: 1 }).addTo(map);
+    mapRef.current = map;
+    return () => { map.remove(); mapRef.current = null; };
+  }, [lat, lon, name, verdictColor]);
+
+  return <div ref={containerRef} className="w-full h-64 rounded-xl overflow-hidden border border-storm-600" />;
+}
+
+// ---------------------------------------------------------------------
+// Result card
+// ---------------------------------------------------------------------
+function ResultCard({ result, onReset }) {
+  const [showDetails, setShowDetails] = useState(false);
+  const v = result.verdict;
+  const style = VERDICT_STYLES[v.verdict] || VERDICT_STYLES.CAUTION;
+  const loc = result.location;
+
+  return (
+    <div className="animate-[fadeIn_0.4s_ease]">
+      <div className={`rounded-2xl border ring-1 ${style.ring} ${style.bg} p-6 md:p-8`}>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-widest text-mist-400 mb-2">
+              {loc.name}{loc.state ? `, ${loc.state}` : ""} — {loc.country}
+            </p>
+            <div className="flex items-center gap-3">
+              <span className="w-10 h-10 rounded-full flex items-center justify-center text-lg font-bold"
+                    style={{ backgroundColor: style.color, color: "#0B1120" }}>
+                {style.icon}
+              </span>
+              <h2 className="font-display text-3xl md:text-4xl font-bold" style={{ color: style.color }}>
+                {style.label}
+              </h2>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="font-mono text-xs text-mist-400">Risk score</p>
+            <p className="font-display text-3xl font-bold text-mist-100">{v.risk_score ?? "—"}<span className="text-base text-mist-400">/100</span></p>
+          </div>
+        </div>
+
+        <p className="mt-5 text-lg text-mist-100 leading-snug">{v.headline_reason}</p>
+
+        <button
+          onClick={() => setShowDetails(s => !s)}
+          className="mt-5 font-mono text-xs uppercase tracking-widest text-sky-400 hover:text-sky-300 transition flex items-center gap-2"
+        >
+          {showDetails ? "Hide" : "Show"} full breakdown
+          <span className={`transition-transform ${showDetails ? "rotate-180" : ""}`}>⌄</span>
+        </button>
+
+        {showDetails && (
+          <div className="mt-4 space-y-2 border-t border-storm-600 pt-4">
+            {(v.details || []).map((d, i) => (
+              <p key={i} className="text-sm text-mist-200 flex gap-2">
+                <span className="text-sky-400">›</span>{d}
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-5">
+        <RiskMap lat={loc.lat} lon={loc.lon} name={loc.name} verdictColor={style.color} />
+      </div>
+
+      {showDetails && (
+        <div className="mt-5 grid md:grid-cols-3 gap-3">
+          <DataPanel title="Weather" data={result.raw_data.weather} />
+          <DataPanel title="Air Quality" data={result.raw_data.air_quality} />
+          <DataPanel title="Disaster Alerts" data={result.raw_data.disaster_alerts} />
+        </div>
+      )}
+
+      <button
+        onClick={onReset}
+        className="mt-6 w-full py-3 rounded-xl border border-storm-600 text-mist-200 hover:bg-storm-700 transition font-medium"
+      >
+        Check another location
+      </button>
+    </div>
+  );
+}
+
+function DataPanel({ title, data }) {
+  if (!data) return null;
+  return (
+    <div className="rounded-xl border border-storm-600 bg-storm-800/60 p-4">
+      <p className="font-mono text-xs uppercase tracking-widest text-mist-400 mb-2">{title}</p>
+      {data.available === false ? (
+        <p className="text-xs text-mist-400">Unavailable — {data.error?.slice(0, 60) || "source unreachable"}</p>
+      ) : (
+        <pre className="text-xs text-mist-200 whitespace-pre-wrap font-mono leading-relaxed max-h-40 overflow-auto">
+{JSON.stringify(data, null, 1).replace(/[{}"]/g, "").trim()}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Form
+// ---------------------------------------------------------------------
+function AssessForm({ onSubmit }) {
+  const [location, setLocation] = useState("");
+  const [activity, setActivity] = useState(ACTIVITIES[0]);
+  const [when, setWhen] = useState("");
+
+  return (
+    <form
+      onSubmit={(e) => { e.preventDefault(); if (location.trim()) onSubmit({ location, activity, when }); }}
+      className="space-y-5"
+    >
+      <div>
+        <label className="block font-mono text-xs uppercase tracking-widest text-mist-400 mb-2">Location</label>
+        <input
+          value={location}
+          onChange={(e) => setLocation(e.target.value)}
+          placeholder="e.g. Nainital, Uttarakhand"
+          className="w-full bg-storm-800 border border-storm-600 rounded-xl px-4 py-3 text-mist-100 placeholder-mist-400/50 focus:outline-none focus:ring-2 focus:ring-sky-500 transition"
+          required
+        />
+      </div>
+
+      <div>
+        <label className="block font-mono text-xs uppercase tracking-widest text-mist-400 mb-2">Planned activity</label>
+        <select
+          value={activity}
+          onChange={(e) => setActivity(e.target.value)}
+          className="w-full bg-storm-800 border border-storm-600 rounded-xl px-4 py-3 text-mist-100 focus:outline-none focus:ring-2 focus:ring-sky-500 transition appearance-none"
+        >
+          {ACTIVITIES.map(a => <option key={a} value={a}>{a}</option>)}
+        </select>
+      </div>
+
+      <div>
+        <label className="block font-mono text-xs uppercase tracking-widest text-mist-400 mb-2">When <span className="text-mist-400/60 normal-case">(optional)</span></label>
+        <input
+          value={when}
+          onChange={(e) => setWhen(e.target.value)}
+          placeholder="e.g. this weekend, Friday evening"
+          className="w-full bg-storm-800 border border-storm-600 rounded-xl px-4 py-3 text-mist-100 placeholder-mist-400/50 focus:outline-none focus:ring-2 focus:ring-sky-500 transition"
+        />
+      </div>
+
+      <button
+        type="submit"
+        className="w-full py-3.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-storm-950 font-display font-semibold text-lg transition shadow-[0_0_24px_-4px_rgba(56,189,248,0.5)]"
+      >
+        Check risk
+      </button>
+    </form>
+  );
+}
+
+// ---------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------
+function App() {
+  const [phase, setPhase] = useState("form"); // form | loading | result | error
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [stage, setStage] = useState(0);
+  const stageTimer = useRef(null);
+
+  const runAssessment = useCallback(async (payload) => {
+    setPhase("loading");
+    setStage(0);
+    setError("");
+    stageTimer.current = setInterval(() => setStage(s => Math.min(s + 1, 4)), 900);
+
+    try {
+      const res = await fetch(`${API_BASE}/assess`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Request failed (${res.status})`);
+      }
+      const data = await res.json();
+      clearInterval(stageTimer.current);
+      setResult(data);
+      setPhase("result");
+    } catch (e) {
+      clearInterval(stageTimer.current);
+      setError(e.message || "Something went wrong reaching the SafeStep backend.");
+      setPhase("error");
+    }
+  }, []);
+
+  const reset = () => { setPhase("form"); setResult(null); setError(""); };
+
+  return (
+    <div className="relative min-h-screen overflow-hidden">
+      {/* ambient sky background */}
+      <div className="absolute inset-0 sky-drift opacity-40" style={{
+        background: "radial-gradient(ellipse at 20% 0%, rgba(56,189,248,0.15), transparent 50%), radial-gradient(ellipse at 80% 100%, rgba(244,63,94,0.08), transparent 50%)",
+      }}></div>
+
+      <div className="relative max-w-2xl mx-auto px-5 py-12 md:py-16">
+        <header className="mb-10 text-center">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-storm-600 bg-storm-800/60 font-mono text-xs text-sky-400 mb-5">
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse"></span>
+            LIVE RISK ADVISOR
+          </div>
+          <h1 className="font-display text-4xl md:text-5xl font-bold text-mist-100 tracking-tight">
+            Safe<span className="text-sky-400">Step</span>
+          </h1>
+          <p className="mt-3 text-mist-400 max-w-md mx-auto">
+            Tell us where you're headed and what you're doing there. We'll read the weather,
+            air quality, and disaster alerts, and tell you straight — go, wait, or skip it.
+          </p>
+        </header>
+
+        <div className="bg-storm-900/80 backdrop-blur border border-storm-600 rounded-2xl p-6 md:p-8">
+          {phase === "form" && <AssessForm onSubmit={runAssessment} />}
+          {phase === "loading" && <RadarLoader stage={stage} />}
+          {phase === "result" && result && <ResultCard result={result} onReset={reset} />}
+          {phase === "error" && (
+            <div className="text-center py-10">
+              <p className="text-danger font-display text-xl mb-2">Couldn't complete the check</p>
+              <p className="text-mist-400 text-sm mb-6">{error}</p>
+              <button onClick={reset} className="px-5 py-2.5 rounded-xl border border-storm-600 text-mist-200 hover:bg-storm-700 transition">
+                Try again
+              </button>
+            </div>
+          )}
+        </div>
+
+        <footer className="mt-10 text-center font-mono text-xs text-mist-400/60">
+          Data: OpenWeatherMap · GDACS · Reasoning: AI — SafeStep
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
