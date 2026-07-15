@@ -3,7 +3,7 @@
 Built for **Sketch 'n' Ship with AI** (GDG Noida) by Team Quantum Minds.
 
 SafeStep takes a location and a planned activity, pulls live weather, air-quality, and
-disaster-alert data, and uses Claude to reason over all three signals together — returning
+disaster-alert data, and uses an AI model to reason over all three signals together — returning
 a plain-language **Proceed / Caution / Avoid** verdict instead of raw numbers on five
 different dashboards.
 
@@ -21,7 +21,7 @@ Backend (FastAPI)
         ├─ Fetch disaster alerts (parallel) → GDACS RSS feed
         │
         ▼
-   Claude (claude-sonnet-5)
+   AI Reasoning Model
    reasons over all signals + the stated activity
         │
         ▼
@@ -33,10 +33,10 @@ Backend (FastAPI)
 
 ## Stack
 
-- **Backend:** FastAPI (Python), httpx for async parallel API calls, Anthropic SDK
+- **Backend:** FastAPI (Python), httpx for async parallel API calls, OpenAI SDK
 - **Frontend:** React 18 (CDN, no build step) + Tailwind CSS (CDN) + Leaflet for the map
 - **Data sources:** OpenWeatherMap (weather, AQI, geocoding — one free key covers all three), GDACS (disaster alerts, no key needed)
-- **Reasoning:** Claude API, single call with structured JSON output
+- **Reasoning:** NVIDIA NIM API (GLM model), single call with structured JSON output
 
 ## Setup
 
