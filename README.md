@@ -1,6 +1,6 @@
 # SafeStep — AI Environmental & Disaster Risk Advisor
 
-Built for **Sketch 'n' Ship with AI** (GDG Noida) by Team Quantum Minds.
+Built for **Sketch 'n' Ship with AI** (GDG Noida).
 
 SafeStep takes a location and a planned activity, pulls live weather, air-quality, and
 disaster-alert data, and uses an AI model to reason over all three signals together — returning
@@ -100,6 +100,3 @@ main `<script type="text/babel">` block in `index.html`:
 - No caching layer — repeated identical requests re-hit all APIs. Fine for a demo, add
   Redis caching for production.
 
-## Team
-
-Lakshya · Priyanshu Sharma · Mohit Prajapat · Nikhil Singhal — Team Quantum Minds
